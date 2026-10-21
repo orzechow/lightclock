@@ -33,7 +33,7 @@
 | Firmware | MicroPython **v1.9.3** (Nov 2017), with `alarmclock/` and `webapp/` frozen into the image |
 | Web | picoweb + offline-compiled utemplate on port 8081; Bootstrap 3.3.5, jQuery 1.11.3, clockpicker |
 | Tooling | Makefile wrapping `ampy` (Python 2), `esptool.py`, gzip, `sed` minification |
-| Repo | 50 commits. Only one branch (`webapp`), no tags. **No GitHub releases**, although the README tells you to download one, so whatever is on the device is the only built copy |
+| Repo | 142 commits (Jan 2017 – Oct 2019). The latest code is on `webapp`. GitHub's default branch is still `master` (Jan 2017); `master` and `asynchron` (Jan 2018) are older and fully merged into `webapp`. No tags. **No GitHub releases**, although the README tells you to download one, so whatever is on the device is the only built copy |
 
 **Pin map** (from `config.json` / `main.py`):
 
@@ -210,7 +210,7 @@ lightclock/
 
 ESPHome `packages:` keep each concern in its own file. Later, a second board file (`board-esp32-feather.yaml`) can sit next to the first one.
 
-**Old code:** tag the current commit `legacy-micropython-1.9.3`, then delete the old code from the new default branch `main`. Git history keeps it.
+**Old code:** tag the tip of `webapp` as `legacy-micropython-1.9.3`, then delete the old code on the rewrite branch. Git history keeps it.
 
 ### Build and flash environment
 
@@ -285,7 +285,7 @@ Each phase ends with something you can check on the real device.
 ### Phase 1 — Repo and toolchain
 
 **Steps**
-1. Tag `legacy-micropython-1.9.3`, create the `main` branch, and make it the default branch on GitHub.
+1. Tag `webapp` as `legacy-micropython-1.9.3`. Make the rewrite the default branch on GitHub (fast-forward `master`, or create `main`), so visitors no longer land on the 2017 code. Delete `asynchron`, which is fully merged.
 2. Add `compose.yaml`, the `Makefile`, `.gitignore` (`secrets.yaml`, `.esphome/`), `secrets.example.yaml` and `renovate.json`.
 3. Add the CI workflow (validate + compile).
 
@@ -366,7 +366,7 @@ Each phase ends with something you can check on the real device.
 3. **LED driver type,** and whether you would swap the board if the low end of the sunrise looks steppy.
 4. **Time zone:** I assumed `Europe/Berlin` from `utc_delay: 1`.
 5. **Home Assistant:** do you run it? If so, enable ESPHome's native API and get history, automations and a phone app for free.
-6. **Old code:** only a git tag (recommended), or keep a `legacy/` folder on `main`?
+6. **Old code:** only a git tag (recommended), or keep a `legacy/` folder on the default branch?
 
 ---
 
