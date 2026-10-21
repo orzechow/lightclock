@@ -1,0 +1,251 @@
+# DRAFT firmware config for the Lightclock (Adafruit Feather HUZZAH ESP8266).
+# Status: passes `esphome config` with ESPHome 2026.10.0; NOT yet compiled or flashed.
+# See docs/modernization-plan.md, Phases 2-4. Needs a secrets.yaml with:
+#   wifi_ssid, wifi_password, ap_password, ota_password
+
+substitutions:
+  name: lightclock
+
+esphome:
+  name: ${name}            # -> http://lightclock.local via mDNS
+  friendly_name: Lightclock
+
+esp8266:
+  board: huzzah            # Adafruit Feather HUZZAH ESP8266
+  restore_from_flash: true # keep wake time / settings across power loss
+
+preferences:
+  flash_write_interval: 5min
+
+logger:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:                      # fallback hotspot replaces the old "offline mode"
+    ssid: "Lightclock Setup"
+    password: !secret ap_password
+
+captive_portal:
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+  version: 3
+  local: true              # no CDN needed
+  sorting_groups:
+    - id: grp_alarm
+      name: "Alarm"
+      sorting_weight: -10
+    - id: grp_settings
+      name: "Settings"
+      sorting_weight: 10
+
+status_led:
+  pin:
+    number: GPIO0
+    inverted: true
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Berlin  # DST handled, replaces utc_delay
+    on_time:
+      - seconds: 0
+        then:
+          - script.execute: check_alarm
+
+i2c:
+  sda: GPIO4
+  scl: GPIO5
+  frequency: 10kHz         # same as the old code; raise if wiring allows
+
+output:
+  - platform: esp8266_pwm
+    id: led_pwm
+    pin: GPIO15
+    frequency: 1000 Hz
+  - platform: esp8266_pwm
+    id: fan_pwm
+    pin: GPIO13
+    frequency: 1000 Hz     # tune on the bench (fan whine vs. ripple)
+    min_power: 30%         # spin-up threshold, measure per fan
+    zero_means_zero: true
+
+light:
+  - platform: monochromatic
+    id: lamp
+    name: "Light"
+    output: led_pwm
+    gamma_correct: 2.8
+    restore_mode: ALWAYS_OFF
+
+fan:
+  - platform: speed
+    id: fan_ctrl
+    name: "Fan"
+    output: fan_pwm
+    speed_count: 100
+    restore_mode: ALWAYS_OFF
+
+sensor:
+  - platform: mcp9808
+    id: led_temp
+    name: "LED temperature"
+    update_interval: 5s
+    filters:
+      - timeout: 30s       # sensor gone silent -> NaN -> fail-safe below
+    on_value:
+      - script.execute: thermal_control
+
+datetime:
+  - platform: template
+    id: wake_time
+    type: time
+    name: "Wake time"
+    optimistic: true
+    restore_value: true
+    initial_value: "07:00:00"
+    web_server:
+      sorting_group_id: grp_alarm
+
+switch:
+  - platform: template
+    id: alarm_enabled
+    name: "Alarm enabled"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    web_server:
+      sorting_group_id: grp_alarm
+
+number:
+  - platform: template
+    id: sunrise_minutes
+    name: "Sunrise duration"
+    unit_of_measurement: min
+    min_value: 1
+    max_value: 120
+    step: 1
+    initial_value: 20
+    optimistic: true
+    restore_value: true
+    web_server:
+      sorting_group_id: grp_settings
+  - platform: template
+    id: stay_on_minutes
+    name: "Stay on after wake time"
+    unit_of_measurement: min
+    min_value: 0
+    max_value: 240
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    web_server:
+      sorting_group_id: grp_settings
+  - platform: template
+    id: max_brightness
+    name: "Maximum brightness"
+    unit_of_measurement: "%"
+    min_value: 1
+    max_value: 100
+    step: 1
+    initial_value: 97
+    optimistic: true
+    restore_value: true
+    web_server:
+      sorting_group_id: grp_settings
+  - platform: template
+    id: shutdown_temp
+    name: "Thermal shutdown"
+    unit_of_measurement: "°C"
+    min_value: 30
+    max_value: 70
+    step: 1
+    initial_value: 40
+    optimistic: true
+    restore_value: true
+    web_server:
+      sorting_group_id: grp_settings
+
+button:
+  - platform: template
+    name: "Stop alarm"
+    on_press:
+      - script.stop: sunrise
+      - light.turn_off: lamp
+    web_server:
+      sorting_group_id: grp_alarm
+  - platform: template
+    name: "Test sunrise (now)"
+    on_press:
+      - script.execute: sunrise
+    web_server:
+      sorting_group_id: grp_settings
+
+globals:
+  - id: overheated
+    type: bool
+    initial_value: "false"
+
+script:
+  # Runs every minute: start the sunrise so that full brightness is reached AT wake time
+  - id: check_alarm
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(alarm_enabled).state) return false;
+              auto now = id(sntp_time).now();
+              if (!now.is_valid()) return false;
+              int wake = id(wake_time).hour * 60 + id(wake_time).minute;
+              int start = wake - (int) id(sunrise_minutes).state;
+              start = ((start % 1440) + 1440) % 1440;  // handle midnight wrap
+              return now.hour * 60 + now.minute == start;
+          then:
+            - script.execute: sunrise
+
+  - id: sunrise
+    mode: restart
+    then:
+      - light.turn_on:
+          id: lamp
+          brightness: 1%
+          transition_length: 0s
+      - light.turn_on:
+          id: lamp
+          brightness: !lambda "return id(max_brightness).state / 100.0f;"
+          transition_length: !lambda "return (uint32_t) (id(sunrise_minutes).state * 60000);"
+      - delay: !lambda "return (uint32_t) ((id(sunrise_minutes).state + id(stay_on_minutes).state) * 60000);"
+      - light.turn_off:
+          id: lamp
+          transition_length: 60s
+
+  # Fan curve + over-temperature protection, evaluated on every temperature reading
+  - id: thermal_control
+    then:
+      - lambda: |-
+          const float t = id(led_temp).state;
+          const float t_fan_on = 28.0f, t_fan_full = id(shutdown_temp).state - 2.0f;
+          float speed;
+          if (std::isnan(t)) {
+            speed = 1.0f;                       // sensor lost: fail safe
+            id(overheated) = true;
+          } else {
+            speed = std::clamp((t - t_fan_on) / (t_fan_full - t_fan_on), 0.0f, 1.0f);
+            if (t >= id(shutdown_temp).state) id(overheated) = true;
+            else if (t < id(shutdown_temp).state - 2.0f) id(overheated) = false;  // hysteresis
+          }
+          if (id(lamp).current_values.is_on()) speed = std::max(speed, 0.3f);
+          if (id(overheated)) {
+            speed = 1.0f;
+            if (id(lamp).current_values.is_on()) id(lamp).turn_off().perform();
+          }
+          if (speed <= 0.0f) {
+            id(fan_ctrl).turn_off().perform();
+          } else {
+            id(fan_ctrl).turn_on().set_speed((int) std::ceil(speed * 100)).perform();
+          }
