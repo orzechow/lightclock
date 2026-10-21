@@ -52,7 +52,7 @@ The `asynchron` branch was rebased into `webapp` by hand and contains nothing th
 | Async runtime | built-in `asyncio` | Replaces `machine.Timer` callbacks and picoweb's loop with one cooperative loop. |
 | Web framework | **Microdot v2.7.0** (asyncio, has a utemplate integration), vendored and frozen | Maintained successor in the picoweb niche. **Risk:** RAM on ESP8266. Phase 2 starts with a spike; the fallback is a ~100-line hand-written `asyncio.start_server` handler, which is all this app needs (`GET /`, `POST /`, static gz files). |
 | Templates | utemplate (vendored as a git submodule, pinned), compiled offline in the container | The existing approach still works. |
-| Front end | Drop jQuery 1.11 + Bootstrap 3 JS + clockpicker. Use native `<input type="time">`, `<details>` for the collapsible settings, and a small hand-written CSS file served gzipped. No CDN. | Removes ~130 KB of assets, the online/offline asset split and old-library CVEs, and makes the page load fast from the board. |
+| Front end | Drop jQuery 1.11 + Bootstrap 3 + clockpicker (~68 KB gzipped, used only for a collapse and a time picker). Use native `<input type="time">`, `<details>` for the collapsible settings, and a small hand-written CSS file. Total ≈ 2–3 KB gzipped, **served from the board only, no CDN**. | The CDNs existed for speed in online mode (local copies took 6–8 s per file before gzip). With assets ~25× smaller that reason is gone, while CDNs fail in AP/offline mode, depend on third-party hosts (`maxcdn.bootstrapcdn.com` may already be retired; unverified), leak visits, and pin libraries with known CVEs. File size doesn't affect RAM, because static files are streamed in chunks. |
 | Board I/O | **`mpremote`** (pip) | Official tool, replaces ampy. Supports `fs cp -r`, `mount` (run code from the PC without copying), `run`, and `repl`. |
 | Flashing | **esptool v5.x** (pip) | |
 | Host Python tooling | `uv` with a `pyproject.toml` (dev group: esptool, mpremote, pytest, ruff) | One lockfile, works the same on Linux, macOS and Windows. |
@@ -134,10 +134,16 @@ Ordered by importance for putting the clock back into service.
      the web server right away (no blocking wait loop).
    - Offline web app: a Wi-Fi form that saves `config_wifi.json` and reconnects without a reboot, plus **manual
      time setting** (POST of the browser's current time → `machine.RTC().datetime(...)`) so the alarm works without NTP.
-4. **Time zone with DST**
-   - Replace `utc_delay` with an EU DST rule (last Sunday of March/October) plus a base offset. Keep the option of a
-     fixed offset for other regions. Pure function, unit-tested. This also removes the "shift the RTC when utc_delay
-     changes" hack in the web app, because the RTC stays in UTC and local time is computed on demand.
+4. **Automatic time zone with DST**
+   - Replace `utc_delay` with a `timezone` config value holding a POSIX TZ rule, e.g. `CET-1CEST,M3.5.0,M10.5.0/3`
+     (default). A small pure-Python parser/evaluator for the `Mm.w.d/time` form (the common one) is unit-tested
+     against known transition dates.
+   - The RTC stays in UTC (as NTP sets it). Local time = UTC + offset from the rule, computed on demand. This removes
+     the "shift the RTC when utc_delay changes" hack from the web app.
+   - The web app detects the browser's zone (`Intl.DateTimeFormat().resolvedOptions().timeZone`), maps it to a POSIX
+     rule via a small built-in table (Europe, US, a few others), and offers it as a one-click "use my time zone".
+     There is also a free-text field for any rule.
+   - No IP-geolocation or online time-zone API: it would add an external dependency and fail in offline mode.
 5. **Web app refresh**
    - Port the routes to Microdot (or the fallback server). Keep the gzip static serving and the cache headers.
    - Native time picker, collapsible settings via `<details>`, server-side validation of min/max from the config schema.
@@ -167,13 +173,13 @@ branches from there.
 ## 6. Risks and open questions
 
 - **RAM on ESP8266** is the main technical risk (Microdot + asyncio + templates). Mitigations: freeze everything,
-  compile templates, stream responses, gzip static files, and keep the fallback server ready. If it's still too tight,
-  upgrading to an ESP32-C3/S3 Feather is a drop-in for most of the code (only the pin numbers in `config.json` change).
+  compile templates, stream responses, gzip static files, and keep the fallback server ready. The hardware stays on
+  the HUZZAH ESP8266, so the fallback server is the real plan B, not a board swap.
 - The `larsks/esp-open-sdk` image is unmaintained. Pin it by digest and keep the tarball fallback documented.
 - PWM frequency: pick an explicit value ≤ 1 kHz and check on the bench that there is no audible coil whine or visible
   flicker at low duty. The current exponential curve starts at a very low duty, where 10-bit resolution steps are visible.
   Consider `duty_u16` with a gamma correction.
-- Questions for the owner:
-  - Is the hardware still the HUZZAH ESP8266, or would an ESP32 board be acceptable?
-  - Which time zone/DST rule do you need?
-  - Do you need the online-CDN assets at all, or is local-only fine?
+- Decisions (owner, October 2026):
+  - Hardware stays the HUZZAH ESP8266.
+  - Automatic time zone handling via a POSIX TZ rule, prefilled from the browser.
+  - No CDNs; the minimal front end is served from the board.
